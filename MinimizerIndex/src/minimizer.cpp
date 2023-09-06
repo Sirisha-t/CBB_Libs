@@ -25,7 +25,7 @@ const int X_DROP_THRESHOLD = 50; // X-drop threshold
 //const int MINHANG = 3;
 
 //DNA overlap parameters
-const int MAPLEN = 30;
+const int MAPLEN = 25;
 const int MINHANG = 10;
 
 
@@ -281,14 +281,14 @@ void MMSketch::computeMinimizerSketch(char* seq, int seqlen, char* header, uint1
     uint32_t shift1 = 2 * (k - 1), mask = (1ULL<<2*k) - 1;
     uint32_t kmer[2] = {0,0}; //to store the forward and reverse kmers
 	int i, j, l, buf_pos, min_pos, kmer_span = 0; // i is used to store current position in input seq, l stores length of current kmer
-	MMHash buf[256], min = { UINT64_MAX, UINT64_MAX };
+	MMHash buf[256], min = { UINT32_MAX, UINT32_MAX };
 
     assert(seqlen > 0 && (w > 0 && w < 256) && (k > 0 && k <= 28)); 
 	memset(buf, 0xff, w * 16);
    
     for (i = l = buf_pos = min_pos = 0; i < seqlen; ++i) {	
         int c = seq_nt4_table[(uint8_t)seq[i]]; 
-		MMHash mm_info = { UINT64_MAX, UINT64_MAX };
+		MMHash mm_info = { UINT32_MAX, UINT32_MAX };
         if (c < 4) { // not an ambiguous base
 			int z;
 			kmer_span = l + 1 < k? l + 1 : k;
@@ -299,10 +299,16 @@ void MMSketch::computeMinimizerSketch(char* seq, int seqlen, char* header, uint1
 			++l;
 
             if (l >= k && kmer_span < 256) {
+                //std::cout<<"entered if\n";
 				mm_info.x = invertableHash(kmer[z], mask) << 8 | kmer_span; //use upto 24 bits for hash value
-				mm_info.y = (uint64_t)id<<32 | (uint32_t)i<<1 | z; //use only right most 16 bits of rid
+				mm_info.y = (uint32_t)id<<16 | (uint16_t)i<<1 | z; //use only right most 16 bits of rid
 			}
-        }   
+        } 
+        uint32_t mm = 51773441;
+        uint16_t rid = (mm_info.y >> 16) & 0xFFFF;
+        uint16_t pos = (mm_info.y & 0xFFFF) >> 1;
+        int zstr = mm_info.y & 0x01;
+        //std::cout<<mm_info.x<<" "<<mm_info.y<<"  "<<id<<"  "<<i<<"  "<<rid<<"  "<<pos<<"  "<<zstr<<"\n";
         
         buf[buf_pos] = mm_info; // need to do this here as appropriate buf_pos and buf[buf_pos] are needed below
         if (l == w + k - 1 && min.x != UINT32_MAX) { // special case for the first window - because identical k-mers are not stored yet
@@ -440,8 +446,22 @@ std::vector<MMMatch> MMSketch::slice(std::vector<MMMatch>const & matches, int st
     return sub_matches;
 }
 
+std::vector<MMMatch> MMSketch::longest_increasing_subset(std::vector<MMMatch>& matches, std::string orientation){
+    std::vector<MMMatch> longest_subset;
 
-std::vector<int> MMSketch::longest_increasing_subset(std::vector<MMMatch>& matches, std::string orientation)
+    // Iterate through the sorted matches and find the longest increasing subset
+    for (const MMMatch& match : matches) {
+        //std::vector<MMMatch> current_subset;
+
+        if (longest_subset.empty() || match.end > longest_subset.back().end) {
+            longest_subset.push_back(match);
+        }
+    }
+    
+    return longest_subset;
+}
+
+/*std::vector<MMMatch> MMSketch::longest_increasing_subset(std::vector<MMMatch>& matches, std::string orientation)
 {
     std::vector<int> map_len;
     for(MMMatch m : matches)    map_len.push_back(m.end);
@@ -462,7 +482,8 @@ std::vector<int> MMSketch::longest_increasing_subset(std::vector<MMMatch>& match
     }
     if(orientation == "+" || orientation == "-")  return P;
     
-}
+    
+}*/
 
 std::vector<std::pair<char, int>> MMSketch :: get_cigar(const std::string& s1, const std::string& s2, const std::vector<Cell>& traceback) {
     std::vector<std::pair<char, int>> cigar;
@@ -558,15 +579,15 @@ void MMSketch::xDropAlignmentExtend(const std::string& seq1, const std::string& 
 }
 
 /*
-Mapping each query sequence to minimizer index hash table
+Mapping each query sequence to minimizer index hash table --align mode (read vs ref)
 */
-void MMSketch::Map(int& kmer, int& window, int epsilon, int& id)
+void MMSketch::Map(char* seq, int seqlen, char* header, uint16_t& seqid, int& kmer, int& window, int epsilon, std::ofstream& outfile)
 {
     std::vector <MMMatch> query_matches;
     std::vector<MMMatch> potential_olap;
-    std::vector<int> indices;
+    std::vector<MMMatch> indices;
     std::string orientation = "";
-    std::string qname = headers[id];
+    std::string qname = header;
 
     int tstart, tend, qstart, qend, orient, mapped_bp;
     std::string tname, first_target, last_target;
@@ -578,17 +599,17 @@ void MMSketch::Map(int& kmer, int& window, int epsilon, int& id)
 
     // Get mm sketch for each query sequence
     std::vector<MMHash> qhash ;
-    computeMinimizerSketch(seqs[id], seqlens[id], headers[id], seqids[id], kmer, window, qhash);   
+    computeMinimizerSketch(seq, seqlen, header, seqid, kmer, window, qhash);   
     for(MMHash q : qhash){
         try{
             for(MMIndex t: MMHashTable[q.x]){  
                 uint16_t qid = (q.y>>16) & 0xFFFF;
                 int qstrand = q.y & 0x01;
-                uint16_t qpos = (q.y >> 1) & 0xFFFF;
+                uint16_t qpos = (q.y & 0xFFFF) >> 1;
 
                 uint16_t tid = (t.info_>>16) & 0xFFFF;
                 int tstrand = t.info_ & 0x01;
-                uint16_t tpos = (t.info_ >> 1) & 0xFFFF;
+                uint16_t tpos = (t.info_ & 0xFFFF) >> 1;
 
                 //ignore same read pair overlaps
                 if(tid == qid)  
@@ -628,52 +649,43 @@ void MMSketch::Map(int& kmer, int& window, int epsilon, int& id)
                     b = e+1;
                 
                     if(orientation == "+"){
-                        indices = longest_increasing_subset(potential_olap, orientation);   
+                        indices = longest_increasing_subset(potential_olap, orientation); 
                     }
                     else{
                         std::reverse(potential_olap.begin(), potential_olap.end());
                         indices = longest_increasing_subset(potential_olap, orientation); 
                     }
+                    
                     if(indices.size() <= 3) continue;
 
-                    int first_mm = indices[0];
-                    int last_mm = indices[indices.size()-1];
+                    //int first_mm = indices[0];
+                    //int last_mm = indices[indices.size()-1];
 
-                        for(MMMatch x : potential_olap){
-                            if(x.end == first_mm){
-                                first_start = x.start;
-                                first_end = x.end;
-                                tname =  headers[x.id];
-                            }
-                            else if(x.end == last_mm){
-                                last_start = x.start;
-                                last_end = x.end;
-                            }
-                        }
-
-                            
+                    MMMatch first_mm = indices[0];
+                    MMMatch last_mm = indices[indices.size()-1];
+                    tname = headers[first_mm.id];
+                         
                     int mapped_bp = indices.size() * kmer;
-                    int qlen = seqlens[id];
-                    int tlen = seqlens[id];;
+                    int qlen = seqlen;
+                    int tlen = seqlens[first_mm.id];;
                    
-                    //get start and end coordinates of minimizer overlaps
                     if(orientation == "+"){
-                        tstart = abs(first_start);
-                        tend = abs(last_end) + kmer;
-                        qstart = abs(first_start) + first_end;     
-                        qend = abs(last_start) + last_end + kmer;
-                    
+                        tstart = first_mm.end;
+                        tend = last_mm.end + kmer;
+                        qstart = first_mm.start + first_mm.end;     
+                        qend = last_mm.start + last_mm.end + kmer;
+                        
+
                     }
-                   else{
-                        tstart = first_end - kmer;
-                        tend = last_end;
-                        qstart = first_end - kmer;
-                        qend = last_end ;
+                    else{
+                        tstart = tlen - first_mm.end - kmer;
+                        tend = tlen - last_mm.end;
+                        qstart = first_mm.start - first_mm.end;    
+                        qend = last_mm.start - last_mm.end + kmer;
                     }
 
-
-                    int overhang = std::min(std::abs(qstart),std::abs(tstart)) + std::min(qlen-qend, tlen-tend);
-                    int maplen = std::max((qend-std::abs(qstart)), (tend - std::abs(tstart)));
+                    int overhang = std::min(qstart,tstart) + std::min(qlen-qend, tlen-tend);
+                    int maplen = std::max((qend - qstart), (tend - tstart));
                     
                     //Do not consider overlaps lesser than MAPLEN
                     if(maplen < MAPLEN) continue;
@@ -683,13 +695,148 @@ void MMSketch::Map(int& kmer, int& window, int epsilon, int& id)
                        continue;
                     }
                         
-                    if(std::abs(qstart) <= std::abs(tstart) && (qlen - qend) <= (tlen-tend))
+                    if(qstart <= tstart && (qlen - qend) <= (tlen-tend))
                        continue;
-                    else if(std::abs(qstart) >= std::abs(tstart) && (qlen - qend) >= (tlen-tend))
+                    else if(qstart >= tstart && (qlen - qend) >= (tlen-tend))
                         continue;
                     
-                    //Output the overlaps 
-                    //std::cout<<qname<<"\t"<<qlen<<"\t"<<std::abs(qstart)<<"\t"<<qend<<"\t"<<orientation<<"\t"<<tname<<"\t"<<tlen<<"\t"<<std::abs(tstart)<<"\t"<<tend<<"\n";   
+                    //Output the overlaps and store into vector
+                    outfile<<qname<<"\t"<<qlen<<"\t"<<qstart<<"\t"<<qend<<"\t"<<orientation<<"\t"<<tname<<"\t"<<tlen<<"\t"<<tstart<<"\t"<<tend<<"\n";
+                    MMOverlapInfo olap_info = MMOverlapInfo(qname,qstart,qend,tname,tstart,tend,orientation);
+                    MMOverlaps.push_back({olap_info});
+           }
+        }
+    } 
+   return;
+}  
+
+
+/*
+Mapping each query sequence to minimizer index hash table --overlap mode (read vs read)
+*/
+void MMSketch::Map(int& kmer, int& window, int epsilon, int& id, std::ofstream& outfile)
+{
+    std::vector <MMMatch> query_matches;
+    std::vector<MMMatch> potential_olap;
+    std::vector<MMMatch> indices;
+    std::string orientation = "";
+    std::string qname = headers[id];
+
+    int tstart, tend, qstart, qend, orient, mapped_bp;
+    std::string tname, first_target, last_target;
+    int first_start = 0;
+    int first_end = 0;
+    int last_end = 0;
+    int last_start = 0;
+
+
+    // Get mm sketch for each query sequence
+    std::vector<MMHash> qhash ;
+    computeMinimizerSketch(seqs[id], seqlens[id], headers[id], seqids[id], kmer, window, qhash);   
+    for(MMHash q : qhash){
+        try{
+            for(MMIndex t: MMHashTable[q.x]){  
+                uint16_t qid = (q.y>>16) & 0xFFFF;
+                int qstrand = q.y & 0x01;
+                uint16_t qpos = (q.y & 0xFFFF) >> 1;
+
+                uint16_t tid = (t.info_>>16) & 0xFFFF;
+                int tstrand = t.info_ & 0x01;
+                uint16_t tpos = (t.info_ & 0xFFFF) >> 1;
+
+                //ignore same read pair overlaps
+                if(tid == qid)  
+                    continue;
+
+                if( tstrand == qstrand){
+                    query_matches.emplace_back(MMMatch(tid, 0, qpos - tpos, tpos));
+                } 
+                else{
+                    query_matches.emplace_back(MMMatch(tid, 1, qpos + tpos, tpos));
+                }
+
+            }          
+        }
+        catch(const std::out_of_range& oor) {};
+    }
+    std::sort(query_matches.begin(), query_matches.end(), qcomparer());
+
+    int b=0;
+
+    if(query_matches.size()>0){
+        for(int e = 0; e < query_matches.size()-1; ++e){
+            if(e == query_matches.size()-1 | 
+                query_matches[e+1].id != query_matches[e].id | 
+                query_matches[e+1].strand != query_matches[e].strand | 
+                query_matches[e+1].start - query_matches[e].start >= epsilon)
+                {   
+                    //extract potential overlaps for each query match
+                    potential_olap = slice(query_matches, b, e);
+
+                    if(query_matches[e].strand == 0)
+                        orientation = "+"; 
+                    
+                    else if (query_matches[e].strand == 1)
+                        orientation = "-";                 
+                
+                    b = e+1;
+                
+                    if(orientation == "+"){
+                        indices = longest_increasing_subset(potential_olap, orientation); 
+                    }
+                    else{
+                        std::reverse(potential_olap.begin(), potential_olap.end());
+                        indices = longest_increasing_subset(potential_olap, orientation); 
+                    }
+                    
+                    if(indices.size() <= 3) continue;
+
+                    //int first_mm = indices[0];
+                    //int last_mm = indices[indices.size()-1];
+
+                    MMMatch first_mm = indices[0];
+                    MMMatch last_mm = indices[indices.size()-1];
+                    tname = headers[first_mm.id];
+                         
+                    int mapped_bp = indices.size() * kmer;
+                    int qlen = seqlens[id];
+                    int tlen = seqlens[id];;
+                   
+                    if(orientation == "+"){
+                        tstart = first_mm.end;
+                        tend = last_mm.end + kmer;
+                        qstart = first_mm.start + first_mm.end;     
+                        qend = last_mm.start + last_mm.end + kmer;
+                        
+
+                    }
+                    else{
+                        tstart = tlen - first_mm.end - kmer;
+                        tend = tlen - last_mm.end;
+                        qstart = first_mm.start - first_mm.end;    
+                        qend = last_mm.start - last_mm.end + kmer;
+                    }
+
+                    int overhang = std::min(qstart,tstart) + std::min(qlen-qend, tlen-tend);
+                    int maplen = std::max((qend - qstart), (tend - tstart));
+                    
+                    //Do not consider overlaps lesser than MAPLEN
+                    if(maplen < MAPLEN) continue;
+                        
+                    //overhang is the bases after and before the computed overlaps
+                    if(overhang > std::min(MINHANG, int(0.8*maplen))){
+                       continue;
+                    }
+                        
+                    if(qstart <= tstart && (qlen - qend) <= (tlen-tend))
+                       continue;
+                    else if(qstart >= tstart && (qlen - qend) >= (tlen-tend))
+                        continue;
+                    
+                    //Output the overlaps and store into vector
+                    outfile<<qname<<"\t"<<qlen<<"\t"<<qstart<<"\t"<<qend<<"\t"<<orientation<<"\t"<<tname<<"\t"<<tlen<<"\t"<<tstart<<"\t"<<tend<<"\n";
+                    MMOverlapInfo olap_info = MMOverlapInfo(qname,qstart,qend,tname,tstart,tend,orientation);
+                    MMOverlaps.push_back({olap_info});
            }
         }
     } 
@@ -761,7 +908,20 @@ void MMSketch::LoadMMIndexFile(const std::string& idxname) {
     in_fh.close();
 }
 
-
+void MMSketch::PrintOverlapInfo(){
+    if(MMOverlaps.size()>0)
+    {
+        cout << "qname  qstart  qend  tname tstart  tend  strand" << endl;
+        for(auto& olap : MMOverlaps){
+        std::cout<<olap.qname<<"\t"<<olap.qstart<<"\t"<<olap.qend<<"\t"<<olap.tname<<"\t"<<olap.tstart<<"\t"<<olap.tend<<"\t"<<olap.strand;
+        std::cout<<endl;
+        }
+    }
+    else{
+        std::cout<<"ERROR: Cannot print overlaps. Please perform indexing and mapping first\n\n";
+        exit(1);
+    }
+}
 
 
 

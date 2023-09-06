@@ -42,7 +42,7 @@ void MMBuild::LoadSequences(std::string& seq_file, const bool &rev_comp)  {
   }
   Loader seq_loader;
   num_seqs_ = seq_loader.CountFastaNumSeqs(seq_file.c_str());
-  cout << "num original seqs:  " << num_seqs_ << endl;
+  cout << "# of seqs:  " << num_seqs_ << endl;
   // double the number of sequences if we need to consider reverse complementary
   int ns = num_seqs_;   // the original number of sequences
   if(rev_comp) {
@@ -136,13 +136,28 @@ void MMBuild::LoadMultiIndex(std::string& dir, std::string& file_stem) {
   return;
 }
 
-void MMBuild::MapQuery(int& kmer, int& window, int& id)  {
+void MMBuild::MapQuery(int& kmer, int& window, int& id, std::ofstream& outfile)  {
   if(!is_mm_built_) { std::cout<<"Index needs to be built before mapping. \n"; exit(0);}
   
-  this->mm_index_->Map(kmer, window, 33, id);
+  this->mm_index_->Map(kmer, window, 33, id, outfile);
   
   return;
 }
+
+void MMBuild::MapQuery(MMBuild& query_seq, int& kmer, int& window, int& id, std::ofstream& outfile)  {
+  if(!is_mm_built_) { std::cout<<"Index needs to be built before mapping. \n"; exit(0);}
+  
+  //Map each query to reference index
+  this->mm_index_->Map(query_seq.sequence_[id], query_seq.seq_len_[id], query_seq.header_[id], query_seq.seq_id_[id], kmer, window, 33, outfile);
+  
+  return;
+}
+
+void MMBuild::PrintOverlaps(){
+  mm_index_->PrintOverlapInfo();
+  return;
+}
+
 
 
 void MMBuild::SetBlockConfig(const int& num_blocks, std::string &dir, std::string &file_stem) {

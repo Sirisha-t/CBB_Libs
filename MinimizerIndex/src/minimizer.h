@@ -48,19 +48,20 @@ typedef struct { size_t n, m; mm64_t *a; } mm64_v;
 
 
 struct MMIndex{
-    uint64_t info_;
+    uint32_t info_;
 
-    MMIndex(const uint64_t& info ){
+    MMIndex(const uint32_t& info ){
       info_ = info;
     }
 };
  
 //NEW MMHASH impl -- same as minimap2's mm128_t struct
 struct MMHash{  
-    //uint32_t x, y;
-    uint64_t x ,y;
+    uint32_t x, y;
 };
 
+
+//Structure to store the query and target matches
 struct MMMatch{
     uint16_t id;
     int strand;
@@ -75,15 +76,26 @@ struct MMMatch{
     }
 };
 
-/*struct comparer{
-    inline bool operator()(const MMMatch& one, const MMMatch& two){
+// Structure to store the overlap output information
+struct MMOverlapInfo{
+    std::string qname;
+    int qstart;
+    int qend;
+    std::string tname;
+    int tstart;
+    int tend;
+    std::string strand;
 
-            return (one.targetSeq < two.targetSeq || one.targetSeq==two.targetSeq && one.strand < two.strand ||
-                one.targetSeq==two.targetSeq && one.strand == two.strand && one.start < two.start ||
-               one.targetSeq==two.targetSeq && one.strand == two.strand && one.start == two.start && one.end < two.end);
-
+    MMOverlapInfo(const std::string& qname_, const int& qstart_, const int& qend_, const std::string& tname_, const int& tstart_, const int& tend_, const std::string& strand_){
+        qname = qname_;
+        qstart = qstart_;
+        qend = qend_;
+        tname = tname_;
+        tstart = tstart_;
+        tend = tend_;
+        strand = strand_;
     }
-};*/
+};
 
 struct hash_comparer{
     inline bool operator()(const MMHash& one, const MMHash& two){
@@ -125,9 +137,11 @@ class MMSketch {
     MMSketch(char **seq, char** header, int* seqlen, uint16_t* seqid, int n, int kmer, int window, bool idx_flag);
     ~MMSketch(void);
     void PrintMinimizers(void);
-    void Map(int& kmer, int& window, int epsilon, int& id);
+    void Map(int& kmer, int& window, int epsilon, int& id,  std::ofstream& outfile);
+    void Map(char* seq, int seqlen, char* header, uint16_t& seqid, int& kmer, int& window, int epsilon, std::ofstream& outfile);
     void DumpAllMMIndex(const char *idx_file);
     void LoadMMIndexFile(const std::string& idxname);
+    void PrintOverlapInfo();
 
     /** Set sequence reads */
 	void setSequences( char **s ) { seqs   = s; }
@@ -147,7 +161,7 @@ class MMSketch {
     void init(char** seq, char** header, int* seqlen, uint16_t* seqid, int n, int kmer, int window);
     void buildSketch();
     std::vector<std::pair<char, int>> get_cigar(const std::string& s1, const std::string& s2, const std::vector<Cell>& traceback);
-    std::vector<int> longest_increasing_subset(std::vector<MMMatch>& matches, std::string orientation);
+    std::vector<MMMatch> longest_increasing_subset(std::vector<MMMatch>& matches, std::string orientation);
     std::vector<MMMatch> slice(std::vector<MMMatch>const & matches, int start, int end);
     void computeMinimizerSketch(char* seq, int seqlen, char* header, uint16_t& id, int& kmer, int &window,std::vector<MMHash>& hashes);   
     void xDropAlignmentExtend(const std::string& seq1, const std::string& seq2, int q_start, int q_end, int t_start, int t_end, std::string& aligned_seq1, std::string& aligned_seq2);
@@ -155,6 +169,7 @@ class MMSketch {
     inline std::string reverseComplement(const std::string& seq);
     inline int hashValue(const char& n);
     uint64_t hash(const std::string & kmer);
+    
 
 
 
@@ -168,6 +183,7 @@ class MMSketch {
     int nreads;
     std::vector<MMHash> mm_hashes;
     std::unordered_map<uint32_t, std::vector<MMIndex>> MMHashTable;
+    std::vector<MMOverlapInfo> MMOverlaps;
     bool is_kmer_set_;
     bool is_mm_built_;
     bool is_window_set_;

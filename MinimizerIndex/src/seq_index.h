@@ -32,13 +32,15 @@ class MMBuild {
   ~MMBuild(void);
   void LoadSequences(std::string& seq_file, const bool &rev_comp);
   void BuildIndex(int& kmer, int& window, std::string &dir, std::string &file_stem);
-  void MapQuery(int& kmer, int& window, int& id);
+  void MapQuery(int& kmer, int& window, int& id, std::ofstream& outfile);
+  void MapQuery(MMBuild& query_seq, int& kmer, int& window, int& id, std::ofstream& outfile);
   void PrintAllSeqsInfo(void);
   void DumpIndextoFile(std::string& dir, std::string& file_stem);
   void LoadIndex(std::string& dir, std::string& file_stem);
   void LoadMultiIndex(std::string& dir, std::string& file_stem);
   void SetBlockConfig(const int& num_blocks, std::string &dir, std::string &file_stem);
   void SplitSequence(std::vector<MMBuild>& block_mm);
+  void PrintOverlaps();
   
   int GetNumSeqs()  {
     assert(is_sequence_loaded_);
