@@ -101,7 +101,7 @@ int Loader::LoadFasta(BioAlphabet &alphabet, const char* file_name, char** heade
         seq_id[count] = count;
         ++ count;
       }
-      fasta_tag = line.substr(1, line.length() - 1); fasta_seq = "";
+      fasta_tag = line.substr(1, line.find(' ')); fasta_seq = "";
     } else fasta_seq += line;
   }
   ifstrm.close();

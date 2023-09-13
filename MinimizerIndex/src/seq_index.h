@@ -47,10 +47,16 @@ class MMBuild {
     return num_seqs_;
   }
 
+  int GetAlphabet() {
+    assert(is_sequence_loaded_);
+    return alpha_;
+  }
+
  protected:
   int num_seqs_;
   double db_size_MB_;
   BioAlphabet alphabet_;
+  int alpha_;
   char** header_;
   char** sequence_;
   int* seq_len_;

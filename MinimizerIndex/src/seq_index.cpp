@@ -12,6 +12,8 @@ MMBuild::MMBuild(void)  {
 }
 
 MMBuild::MMBuild(BioAlphabet& alpha)  {
+  if(alpha.GetSeqType()== DNA) alpha_ = 1;
+  else  alpha_ = 0;
   alphabet_ = alpha;
   is_alphabet_set_ = true;
   is_block_loaded_ = false;
@@ -86,12 +88,12 @@ void MMBuild::BuildIndex(int& kmer, int& window, std::string& dir, std::string& 
   std::ifstream in_fh(idx_file);
   if (in_fh.good()) {
     std::cout<<"Index has already been built. Loading it now."<<endl;
-    mm_index_ = new MMSketch((char**) sequence_, (char**) header_, seq_len_, seq_id_, num_seqs_, kmer, window, 0);
+    mm_index_ = new MMSketch((char**) sequence_, (char**) header_, seq_len_, seq_id_, num_seqs_, kmer, window, alpha_, 0);
     this->mm_index_->LoadMMIndexFile(idx_file.c_str());
     is_mm_loaded_ = true;
   }
   else{
-    mm_index_ = new MMSketch((char**) sequence_, (char**) header_, seq_len_, seq_id_, num_seqs_, kmer, window, 1);
+    mm_index_ = new MMSketch((char**) sequence_, (char**) header_, seq_len_, seq_id_, num_seqs_, kmer, window, alpha_, 1);
   }
   is_mm_built_ = true;
   return;

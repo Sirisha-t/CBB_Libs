@@ -21,13 +21,42 @@ const int GAP_PENALTY = 1; // gap penalty
 const int X_DROP_THRESHOLD = 50; // X-drop threshold
 
 //Protein overlap parameters
-//const int MAPLEN = 7;
-//const int MINHANG = 3;
+//const int MAPLEN = 10;
+//const int MINHANG = 5;
 
 //DNA overlap parameters
-const int MAPLEN = 25;
-const int MINHANG = 10;
+int MAPLEN = 25;
+int MINHANG = 10;
 
+
+unsigned char seq_pr_table[256] = {
+	  26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 24, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 0, 20, 4, 3, 6,
+      13, 7, 8, 9, 21, 11, 10, 12, 2, 26,
+      14, 5, 1, 15, 16, 26, 19, 17, 23, 18,
+      22, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26, 26, 26, 26, 26,
+      26, 26, 26, 26, 26, 26
+};
 
 unsigned char seq_nt4_table[256] = {
 	0, 1, 2, 3,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
@@ -75,28 +104,39 @@ static FORCE_INLINE uint64_t fmix64 ( uint64_t k )
 
 MMSketch::MMSketch()
 {
-    init(NULL, NULL, 0, 0, 0, 0, 0);
+    init(NULL, NULL, 0, 0, 0, 0, 0, 0);
 }
 
-MMSketch::MMSketch(char **seq, char **header, int* seqlen, uint16_t* seqid, int n, int kmer, int window, bool idx_flag)  {
- init(seq, header, seqlen, seqid, n, kmer, window);
+MMSketch::MMSketch(char **seq, char **header, int* seqlen, uint16_t* seqid, int n, int kmer, int window, int& alpha, bool idx_flag)  {
+ init(seq, header, seqlen, seqid, n, kmer, window, alpha);
  std::cout<<"MMSketch initialized successfully. Building sketch now for k="<<kmer<<",w="<<window<<"\n";
  if(idx_flag)
     MMSketch::buildSketch();
  return;
 }
 
-void MMSketch::init( char **seq, char **header, int* seqlen, uint16_t* seqid, int n,int kmer, int window){
+void MMSketch::init( char **seq, char **header, int* seqlen, uint16_t* seqid, int n,int kmer, int window, int alpha){
   seqs = seq;
   headers = header;
   seqlens = seqlen;
   seqids = seqid;
+  alphabet = alpha;
   k = kmer;
   w = window;
   nreads = n;
   is_mm_built_ = false;
   is_kmer_set_ = true;
   is_window_set_ = true;
+
+  if(alphabet == 0){
+    MAPLEN = 10;
+    MINHANG = 5;
+  }
+  
+  qmap = new bool [nreads];   
+  for(int i = 0; i < nreads; ++ i) {
+    qmap[i] = false;
+  }
 }
 
 MMSketch::~MMSketch(void) {
@@ -276,60 +316,84 @@ inline uint32_t MMSketch::invertableHash(uint32_t key, uint32_t mask){
 
 
 /* Compute the minimizer sketch for each sequence -- Minimap2's impl */
-void MMSketch::computeMinimizerSketch(char* seq, int seqlen, char* header, uint16_t& id, int& k, int& w, std::vector<MMHash>& hashes ){
-    //std::vector<MMHash> tmp_hashes;
+void MMSketch::computeMinimizerSketch(char* seq, int seqlen, char* header, uint16_t& id, int& alphabet, int& k, int& w, std::vector<MMHash>& hashes ){
+    std::vector<MMHash> tmp_hashes;
     uint32_t shift1 = 2 * (k - 1), mask = (1ULL<<2*k) - 1;
     uint32_t kmer[2] = {0,0}; //to store the forward and reverse kmers
 	int i, j, l, buf_pos, min_pos, kmer_span = 0; // i is used to store current position in input seq, l stores length of current kmer
 	MMHash buf[256], min = { UINT32_MAX, UINT32_MAX };
-
+    int c;
     assert(seqlen > 0 && (w > 0 && w < 256) && (k > 0 && k <= 28)); 
 	memset(buf, 0xff, w * 16);
    
     for (i = l = buf_pos = min_pos = 0; i < seqlen; ++i) {	
-        int c = seq_nt4_table[(uint8_t)seq[i]]; 
-		MMHash mm_info = { UINT32_MAX, UINT32_MAX };
-        if (c < 4) { // not an ambiguous base
-			int z;
-			kmer_span = l + 1 < k? l + 1 : k;
-			kmer[0] = (kmer[0] << 2 | c) & mask;           // forward k-mer -- here mask is used for clearing out any bits outside the given bit range
-			kmer[1] = (kmer[1] >> 2) | (3ULL^c) << shift1; // reverse k-mer
-			if (kmer[0] == kmer[1]) continue; // skip "symmetric k-mers" 
-			z = kmer[0] < kmer[1]? 0 : 1; // strand
-			++l;
+        MMHash mm_info = { UINT32_MAX, UINT32_MAX };
+        if (alphabet == 1) 
+        {
+            int c = seq_nt4_table[(uint8_t)seq[i]];  
+            if (c < 4 ) { // not an ambiguous base
+                int z;
+                kmer_span = l + 1 < k? l + 1 : k;
+                kmer[0] = (kmer[0] << 2 | c) & mask;           // forward k-mer -- here mask is used for clearing out any bits outside the given bit range
+                kmer[1] = (kmer[1] >> 2) | (3ULL^c) << shift1; // reverse k-mer
+                if (kmer[0] == kmer[1]) continue; // skip "symmetric k-mers" 
+                z = kmer[0] < kmer[1]? 0 : 1; // strand
+                ++l;
 
-            if (l >= k && kmer_span < 256) {
-                //std::cout<<"entered if\n";
-				mm_info.x = invertableHash(kmer[z], mask) << 8 | kmer_span; //use upto 24 bits for hash value
-				mm_info.y = (uint32_t)id<<16 | (uint16_t)i<<1 | z; //use only right most 16 bits of rid
-			}
-        } 
-        uint32_t mm = 51773441;
-        uint16_t rid = (mm_info.y >> 16) & 0xFFFF;
-        uint16_t pos = (mm_info.y & 0xFFFF) >> 1;
-        int zstr = mm_info.y & 0x01;
+                if (l >= k && kmer_span < 256) {
+                    //std::cout<<"entered if\n";
+                    mm_info.x = invertableHash(kmer[z], mask) << 8 | kmer_span; //use upto 24 bits for hash value
+                    mm_info.y = (uint32_t)id<<16 | (uint16_t)i<<1 | z; //use only right most 16 bits of rid
+                }
+            }
+        }
+        else
+        {
+            int c = seq_pr_table[(uint8_t)seq[i]];  
+            if (c < 26 ) { // not an ambiguous base -protein
+                int z;
+                kmer_span = l + 1 < k? l + 1 : k;
+                kmer[0] = (kmer[0] << 2 | c) & mask;           // forward k-mer -- here mask is used for clearing out any bits outside the given bit range
+                kmer[1] = (kmer[1] >> 2) | (3ULL^c) << shift1; // reverse k-mer
+                if (kmer[0] == kmer[1]) continue; // skip "symmetric k-mers" 
+                z = kmer[0] < kmer[1]? 0 : 1; // strand
+                ++l;
+
+                if (l >= k && kmer_span < 256) {
+                    //std::cout<<"entered if\n";
+                    mm_info.x = invertableHash(kmer[z], mask) << 8 | kmer_span; //use upto 24 bits for hash value
+                    mm_info.y = (uint32_t)id<<16 | (uint16_t)i<<1 | z; //use only right most 16 bits of rid
+                }
+            }
+        }
+
+        uint32_t mm = 655393;
+        uint16_t rid = (mm >> 16) & 0xFFFF;
+        uint16_t pos = (mm & 0xFFFF) >> 1;
+        int zstr = mm & 0x01;
         //std::cout<<mm_info.x<<" "<<mm_info.y<<"  "<<id<<"  "<<i<<"  "<<rid<<"  "<<pos<<"  "<<zstr<<"\n";
-        
+        //std::cout<<mm<<"  "<<rid<<"  "<<pos<<"  "<<zstr<<"\n";
+
         buf[buf_pos] = mm_info; // need to do this here as appropriate buf_pos and buf[buf_pos] are needed below
         if (l == w + k - 1 && min.x != UINT32_MAX) { // special case for the first window - because identical k-mers are not stored yet
 			for (j = buf_pos + 1; j < w; ++j)
 				if (min.x == buf[j].x && buf[j].y != min.y) 
                 {
                     hashes.push_back(buf[j]);
-                    //tmp_hashes.push_back(buf[j]);
+                    tmp_hashes.push_back(buf[j]);
                 }    
 			for (j = 0; j < buf_pos; ++j)
 				if (min.x == buf[j].x && buf[j].y != min.y)
                 {  
                     hashes.push_back(buf[j]);
-                    //tmp_hashes.push_back(buf[j]);        
+                    tmp_hashes.push_back(buf[j]);        
                 }      
 		}
         if (mm_info.x <= min.x) { // a new minimum; then write the old min
 			if (l >= w + k && min.x != UINT64_MAX) 
             {
                 hashes.push_back(min);
-                //tmp_hashes.push_back(min);
+                tmp_hashes.push_back(min);
             }
 			min = mm_info, min_pos = buf_pos;
 		}
@@ -337,7 +401,7 @@ void MMSketch::computeMinimizerSketch(char* seq, int seqlen, char* header, uint1
 			if (l >= w + k - 1 && min.x != UINT32_MAX) 
             {
                 hashes.push_back(min);
-                //tmp_hashes.push_back(min);
+                tmp_hashes.push_back(min);
 			}
 			for (j = buf_pos + 1, min.x = UINT32_MAX; j < w; ++j) // the two loops are necessary when there are identical k-mers
 				if (min.x >= buf[j].x) min = buf[j], min_pos = j; // >= is important s.t. min is always the closest k-mer
@@ -348,13 +412,13 @@ void MMSketch::computeMinimizerSketch(char* seq, int seqlen, char* header, uint1
 					if (min.x == buf[j].x && min.y != buf[j].y)
                         {
                             hashes.push_back(buf[j]);
-                            //tmp_hashes.push_back(buf[j]);
+                            tmp_hashes.push_back(buf[j]);
                         }
 				for (j = 0; j <= buf_pos; ++j)
 					if (min.x == buf[j].x && min.y != buf[j].y) 
                         {
                             hashes.push_back(buf[j]);
-                            //tmp_hashes.push_back(buf[j]);
+                            tmp_hashes.push_back(buf[j]);
                         }
 			}
 		}
@@ -362,9 +426,15 @@ void MMSketch::computeMinimizerSketch(char* seq, int seqlen, char* header, uint1
 	}
 	if (min.x != UINT32_MAX){
         hashes.push_back(min);
-        //tmp_hashes.push_back(min);
+        tmp_hashes.push_back(min);
     }
 
+    /*std::cout<<seq<<"  "<<header<<"  "<<id<<"\n";
+    for(auto &hash: tmp_hashes){
+        std::cout<<hash.x<<", "<<hash.y<<"\t";
+    }
+    std::cout<<"\n\n";
+    */
     return ;
 
 }
@@ -386,7 +456,7 @@ void MMSketch::buildSketch(){
     
     //Compute mm sketch for each sequence 
     for(int i=0; i < nreads; i++){
-        computeMinimizerSketch(seqs[i], seqlens[i], headers[i], seqids[i], k, w, mm_hashes);   
+        computeMinimizerSketch(seqs[i], seqlens[i], headers[i], seqids[i], alphabet, k, w, mm_hashes);   
         count++;
     }
     t = clock() - t;
@@ -596,11 +666,11 @@ void MMSketch::Map(char* seq, int seqlen, char* header, uint16_t& seqid, int& km
     int last_end = 0;
     int last_start = 0;
 
-
     // Get mm sketch for each query sequence
     std::vector<MMHash> qhash ;
-    computeMinimizerSketch(seq, seqlen, header, seqid, kmer, window, qhash);   
+    computeMinimizerSketch(seq, seqlen, header, seqid, alphabet, kmer, window, qhash);   
     for(MMHash q : qhash){
+        std::cout<<"Query "<<q.x<<"\t"<<q.y<<"\n";
         try{
             for(MMIndex t: MMHashTable[q.x]){  
                 uint16_t qid = (q.y>>16) & 0xFFFF;
@@ -610,6 +680,7 @@ void MMSketch::Map(char* seq, int seqlen, char* header, uint16_t& seqid, int& km
                 uint16_t tid = (t.info_>>16) & 0xFFFF;
                 int tstrand = t.info_ & 0x01;
                 uint16_t tpos = (t.info_ & 0xFFFF) >> 1;
+                std::cout<<tpos<<"\t"<<tid<<"\t"<<qpos<<"\t"<<qid<<"\n";
 
                 //ignore same read pair overlaps
                 if(tid == qid)  
@@ -640,6 +711,9 @@ void MMSketch::Map(char* seq, int seqlen, char* header, uint16_t& seqid, int& km
                     //extract potential overlaps for each query match
                     potential_olap = slice(query_matches, b, e);
 
+                    //for(auto &p: potential_olap){
+                     //   std::cout<<p.id<<"  "<<p.start<<"  "<<p.end<<"  "<<p.strand<<"\n";
+                    //}
                     if(query_matches[e].strand == 0)
                         orientation = "+"; 
                     
@@ -653,6 +727,7 @@ void MMSketch::Map(char* seq, int seqlen, char* header, uint16_t& seqid, int& km
                     }
                     else{
                         std::reverse(potential_olap.begin(), potential_olap.end());
+                         
                         indices = longest_increasing_subset(potential_olap, orientation); 
                     }
                     
@@ -667,7 +742,8 @@ void MMSketch::Map(char* seq, int seqlen, char* header, uint16_t& seqid, int& km
                          
                     int mapped_bp = indices.size() * kmer;
                     int qlen = seqlen;
-                    int tlen = seqlens[first_mm.id];;
+                    int tlen = seqlens[first_mm.id];
+
                    
                     if(orientation == "+"){
                         tstart = first_mm.end;
@@ -696,7 +772,7 @@ void MMSketch::Map(char* seq, int seqlen, char* header, uint16_t& seqid, int& km
                     }
                         
                     if(qstart <= tstart && (qlen - qend) <= (tlen-tend))
-                       continue;
+                        continue;
                     else if(qstart >= tstart && (qlen - qend) >= (tlen-tend))
                         continue;
                     
@@ -724,28 +800,29 @@ void MMSketch::Map(int& kmer, int& window, int epsilon, int& id, std::ofstream& 
 
     int tstart, tend, qstart, qend, orient, mapped_bp;
     std::string tname, first_target, last_target;
-    int first_start = 0;
-    int first_end = 0;
-    int last_end = 0;
-    int last_start = 0;
-
+    uint16_t qid, tid;
 
     // Get mm sketch for each query sequence
     std::vector<MMHash> qhash ;
-    computeMinimizerSketch(seqs[id], seqlens[id], headers[id], seqids[id], kmer, window, qhash);   
+    computeMinimizerSketch(seqs[id], seqlens[id], headers[id], seqids[id], alphabet, kmer, window, qhash);   
     for(MMHash q : qhash){
+        
         try{
             for(MMIndex t: MMHashTable[q.x]){  
-                uint16_t qid = (q.y>>16) & 0xFFFF;
+                qid = (q.y>>16) & 0xFFFF;
                 int qstrand = q.y & 0x01;
                 uint16_t qpos = (q.y & 0xFFFF) >> 1;
 
-                uint16_t tid = (t.info_>>16) & 0xFFFF;
+                tid = (t.info_>>16) & 0xFFFF;
                 int tstrand = t.info_ & 0x01;
                 uint16_t tpos = (t.info_ & 0xFFFF) >> 1;
 
                 //ignore same read pair overlaps
                 if(tid == qid)  
+                    continue;
+
+                //ignore tid mapping if it has previously been computed 
+                if(qmap[tid])
                     continue;
 
                 if( tstrand == qstrand){
@@ -782,17 +859,14 @@ void MMSketch::Map(int& kmer, int& window, int epsilon, int& id, std::ofstream& 
                     b = e+1;
                 
                     if(orientation == "+"){
-                        indices = longest_increasing_subset(potential_olap, orientation); 
+                        indices = longest_increasing_subset(potential_olap, orientation);
                     }
                     else{
-                        std::reverse(potential_olap.begin(), potential_olap.end());
+                        //std::reverse(potential_olap.begin(), potential_olap.end());
                         indices = longest_increasing_subset(potential_olap, orientation); 
                     }
                     
                     if(indices.size() <= 3) continue;
-
-                    //int first_mm = indices[0];
-                    //int last_mm = indices[indices.size()-1];
 
                     MMMatch first_mm = indices[0];
                     MMMatch last_mm = indices[indices.size()-1];
@@ -813,19 +887,23 @@ void MMSketch::Map(int& kmer, int& window, int epsilon, int& id, std::ofstream& 
                     else{
                         tstart = tlen - first_mm.end - kmer;
                         tend = tlen - last_mm.end;
-                        qstart = first_mm.start - first_mm.end;    
-                        qend = last_mm.start - last_mm.end + kmer;
+                        qend = first_mm.start - first_mm.end;    
+                        qstart = last_mm.start - last_mm.end + kmer;
+                        //std::cout<<tname<<"  "<<tid<<"  "<<tstart<<"  "<<tend<<"  "<<qname<<"  "<<qid<<"  "<<qstart<<"  "<<qend<<"\n"; 
                     }
 
                     int overhang = std::min(qstart,tstart) + std::min(qlen-qend, tlen-tend);
                     int maplen = std::max((qend - qstart), (tend - tstart));
                     
                     //Do not consider overlaps lesser than MAPLEN
-                    if(maplen < MAPLEN) continue;
+                    if(std::abs(maplen) < MAPLEN){
+                         continue;
+                    } 
                         
                     //overhang is the bases after and before the computed overlaps
                     if(overhang > std::min(MINHANG, int(0.8*maplen))){
-                       continue;
+                       if(orientation == "+")
+                        continue;
                     }
                         
                     if(qstart <= tstart && (qlen - qend) <= (tlen-tend))
@@ -835,12 +913,14 @@ void MMSketch::Map(int& kmer, int& window, int epsilon, int& id, std::ofstream& 
                     
                     //Output the overlaps and store into vector
                     outfile<<qname<<"\t"<<qlen<<"\t"<<qstart<<"\t"<<qend<<"\t"<<orientation<<"\t"<<tname<<"\t"<<tlen<<"\t"<<tstart<<"\t"<<tend<<"\n";
-                    MMOverlapInfo olap_info = MMOverlapInfo(qname,qstart,qend,tname,tstart,tend,orientation);
-                    MMOverlaps.push_back({olap_info});
+                    
+                    //MMOverlapInfo olap_info = MMOverlapInfo(qname,qstart,qend,tname,tstart,tend,orientation);
+                    //MMOverlaps.push_back({olap_info});
+                    qmap[qid] = true;
            }
         }
-    } 
-   return;
+    }
+    return;
 }  
 
 

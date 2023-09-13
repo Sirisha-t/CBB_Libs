@@ -7,6 +7,7 @@
 #include "xxhash64.h"
 #include "ksort.h"
 
+
 #include <boost/filesystem.hpp>
 #include <algorithm>
 #include <functional>
@@ -17,6 +18,7 @@
 #include <iostream>
 #include <fstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <map>
 #include <vector>
 #include <tuple>
@@ -130,11 +132,12 @@ struct Cell {
 };
 
 
+
 class MMSketch {
  public:
     //Default constructor
     MMSketch();
-    MMSketch(char **seq, char** header, int* seqlen, uint16_t* seqid, int n, int kmer, int window, bool idx_flag);
+    MMSketch(char **seq, char** header, int* seqlen, uint16_t* seqid, int n, int kmer, int window,int& alpha, bool idx_flag);
     ~MMSketch(void);
     void PrintMinimizers(void);
     void Map(int& kmer, int& window, int epsilon, int& id,  std::ofstream& outfile);
@@ -154,16 +157,25 @@ class MMSketch {
             return MMHashTable;
         }
     
-    
+
+    struct PairHash {
+    template <class T1, class T2>
+    std::size_t operator () (const std::pair<T1, T2>& p) const {
+        // Hash both elements and combine the hashes
+        std::size_t h1 = std::hash<T1>{}(p.first);
+        std::size_t h2 = std::hash<T2>{}(p.second);
+        return h1 ^ h2;
+    }
+};
    
 
  private:
-    void init(char** seq, char** header, int* seqlen, uint16_t* seqid, int n, int kmer, int window);
+    void init(char** seq, char** header, int* seqlen, uint16_t* seqid, int n, int kmer, int window, int alpha);
     void buildSketch();
     std::vector<std::pair<char, int>> get_cigar(const std::string& s1, const std::string& s2, const std::vector<Cell>& traceback);
     std::vector<MMMatch> longest_increasing_subset(std::vector<MMMatch>& matches, std::string orientation);
     std::vector<MMMatch> slice(std::vector<MMMatch>const & matches, int start, int end);
-    void computeMinimizerSketch(char* seq, int seqlen, char* header, uint16_t& id, int& kmer, int &window,std::vector<MMHash>& hashes);   
+    void computeMinimizerSketch(char* seq, int seqlen, char* header, uint16_t& id, int&alphabet, int& kmer, int &window,std::vector<MMHash>& hashes);   
     void xDropAlignmentExtend(const std::string& seq1, const std::string& seq2, int q_start, int q_end, int t_start, int t_end, std::string& aligned_seq1, std::string& aligned_seq2);
     inline uint32_t invertableHash(uint32_t hash_val, uint32_t mask);
     inline std::string reverseComplement(const std::string& seq);
@@ -180,9 +192,12 @@ class MMSketch {
     char** headers;
     int* seqlens;
     uint16_t* seqids;
+    bool* qmap;
     int nreads;
+    int alphabet;
     std::vector<MMHash> mm_hashes;
     std::unordered_map<uint32_t, std::vector<MMIndex>> MMHashTable;
+    //std::unordered_set<std::pair<uint16_t, uint16_t>, PairHash> overlap_pair;
     std::vector<MMOverlapInfo> MMOverlaps;
     bool is_kmer_set_;
     bool is_mm_built_;

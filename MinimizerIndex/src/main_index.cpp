@@ -101,6 +101,8 @@ int main(int argc, char** argv)
   BioAlphabet alphabet;
   if(seq_type == "nucl")  alphabet = BioAlphabet(DNA);
   else alphabet = BioAlphabet(PROT);
+
+  //std::cout<<"Alphabet: "<<alphabet.GetSeqType()<<"\n";
   // load in sequence from file for forward sequences
   UtilFunc util;
   string target_stem = util.GetFileStem(target_file);
@@ -130,7 +132,7 @@ int main(int argc, char** argv)
   /** Index target sequences **/
   start_time = util.MyTime();
   std::cout<<"Building minimizer index for target..\n";
-  target_seq.BuildIndex(kmer_size, win_size,workspace_dir, target_stem );
+  target_seq.BuildIndex(kmer_size, win_size,workspace_dir, target_stem);
 
   if(dump_idx)
   {
